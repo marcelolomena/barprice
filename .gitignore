@@ -1,29 +1,3 @@
-# Node
-node_modules/
-npm-debug.log
-yarn-error.log
-
-# Android build
-mobile/BarPriceApp/android/app/build/
-mobile/BarPriceApp/android/build/
-mobile/BarPriceApp/android/.gradle/
-mobile/BarPriceApp/android/local.properties
-
-# iOS build
-mobile/BarPriceApp/ios/build/
-mobile/BarPriceApp/ios/Pods/
-
-# React Native
-mobile/BarPriceApp/.bundle/
-
-# Keystore (seguridad)
-*.keystore
-*.jks
-
-# Env files
-.env
-.env.*
-
-# OS
-.DS_Store
-Thumbs.db
+firebase-credentials.json
+target/
+*.class
