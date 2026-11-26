@@ -9,6 +9,8 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  FlatList,
+  Modal,
 } from 'react-native'
 import { RNCamera } from 'react-native-camera'
 
@@ -16,7 +18,6 @@ const API_URL = 'https://barprice-api-node.onrender.com/api/products'
 const API_KEY = 'al_val_pmyvfFNkNPLNkDTYtWbEsZIOpceQzsb4'
 const HEADERS = { 'x-api-key': API_KEY, 'Content-Type': 'application/json' }
 
-// mode: 'scan' | 'result' | 'add' | 'edit'
 export default function App() {
   const [mode, setMode] = useState('scan')
   const [cameraReady, setCameraReady] = useState(false)
@@ -28,6 +29,15 @@ export default function App() {
   const [editName, setEditName] = useState('')
   const [editPrice, setEditPrice] = useState('')
   const [saveError, setSaveError] = useState(null)
+  const [showList, setShowList] = useState(false)
+  const [productList, setProductList] = useState([])
+  const [listLoading, setListLoading] = useState(false)
+  const [listLoadingMore, setListLoadingMore] = useState(false)
+  const [listError, setListError] = useState(null)
+  const [listTotal, setListTotal] = useState(0)
+  const [listHasMore, setListHasMore] = useState(true)
+  const [listOffset, setListOffset] = useState(0)
+  const LIST_LIMIT = 10
 
   const onBarCodeRead = async ({ data }) => {
     if (mode !== 'scan') return
@@ -131,6 +141,38 @@ export default function App() {
     } finally {
       setSaving(false)
     }
+  }
+
+  const openList = async () => {
+    setShowList(true)
+    setProductList([])
+    setListOffset(0)
+    setListHasMore(true)
+    setListError(null)
+    await fetchProducts(0, true)
+  }
+
+  const fetchProducts = async (offset, reset = false) => {
+    if (reset) setListLoading(true)
+    else setListLoadingMore(true)
+    try {
+      const res = await fetch(`${API_URL}?limit=${LIST_LIMIT}&offset=${offset}`, { headers: HEADERS })
+      if (!res.ok) throw new Error('Error al cargar productos')
+      const json = await res.json()
+      setProductList(prev => reset ? json.products : [...prev, ...json.products])
+      setListTotal(json.total)
+      setListHasMore(json.hasMore)
+      setListOffset(offset + LIST_LIMIT)
+    } catch (e) {
+      setListError(e.message)
+    } finally {
+      setListLoading(false)
+      setListLoadingMore(false)
+    }
+  }
+
+  const loadMore = () => {
+    if (!listLoadingMore && listHasMore) fetchProducts(listOffset)
   }
 
   const renderPanel = () => {
@@ -247,11 +289,54 @@ export default function App() {
             <Text style={styles.hint}>Apunta al código de barras</Text>
           </View>
         )}
+        <TouchableOpacity style={styles.menuButton} onPress={openList}>
+          <Text style={styles.menuIcon}>☰</Text>
+        </TouchableOpacity>
       </RNCamera>
 
       <View style={styles.resultPanel}>
         {renderPanel()}
       </View>
+
+      <Modal visible={showList} animationType="slide" onRequestClose={() => setShowList(false)}>
+        <View style={styles.listContainer}>
+          <View style={styles.listHeader}>
+            <Text style={styles.listTitle}>Listado de productos</Text>
+            <TouchableOpacity onPress={() => setShowList(false)} style={styles.closeButton}>
+              <Text style={styles.closeButtonText}>✕</Text>
+            </TouchableOpacity>
+          </View>
+
+          {listLoading && <ActivityIndicator size="large" color="#007AFF" style={{ marginTop: 40 }} />}
+          {listError && <Text style={styles.listError}>⚠ {listError}</Text>}
+
+          {!listLoading && !listError && (
+            <>
+              <Text style={styles.listCount}>Total: {listTotal} productos</Text>
+              <FlatList
+                data={productList}
+                keyExtractor={(item, index) => item.barcode || String(index)}
+                renderItem={({ item, index }) => (
+                  <View style={styles.listItem}>
+                    <Text style={styles.listIndex}>{index + 1}.</Text>
+                    <Text style={styles.listName} numberOfLines={1}>{item.name}</Text>
+                    <Text style={styles.listPrice}>${item.price.toFixed(2)}</Text>
+                  </View>
+                )}
+                ItemSeparatorComponent={() => <View style={styles.separator} />}
+                onEndReached={loadMore}
+                onEndReachedThreshold={0.3}
+                ListFooterComponent={() => listLoadingMore
+                  ? <ActivityIndicator color="#007AFF" style={{ margin: 16 }} />
+                  : !listHasMore && productList.length > 0
+                    ? <Text style={styles.listEnd}>— Fin del listado —</Text>
+                    : null
+                }
+              />
+            </>
+          )}
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   )
 }
@@ -264,6 +349,15 @@ const styles = StyleSheet.create({
   scanArea: { flex: 1, justifyContent: 'center', alignItems: 'center', marginBottom: 220 },
   scanBox: { width: 250, height: 150, borderWidth: 2, borderColor: '#007AFF', borderRadius: 12 },
   hint: { color: '#fff', fontSize: 14, marginTop: 16 },
+  menuButton: {
+    position: 'absolute',
+    top: 16,
+    right: 16,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    borderRadius: 8,
+    padding: 10,
+  },
+  menuIcon: { color: '#fff', fontSize: 22 },
   resultPanel: {
     position: 'absolute',
     bottom: 0,
@@ -299,4 +393,32 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#444',
   },
+  // List modal
+  listContainer: { flex: 1, backgroundColor: '#111' },
+  listHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 16,
+    paddingTop: 48,
+    backgroundColor: '#1a1a1a',
+    borderBottomWidth: 1,
+    borderBottomColor: '#333',
+  },
+  listTitle: { color: '#fff', fontSize: 18, fontWeight: '700' },
+  closeButton: { padding: 8 },
+  closeButtonText: { color: '#fff', fontSize: 20, fontWeight: '700' },
+  listCount: { color: '#888', fontSize: 13, paddingHorizontal: 16, paddingVertical: 10 },
+  listItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  listIndex: { color: '#666', fontSize: 13, width: 32 },
+  listName: { color: '#fff', fontSize: 15, flex: 1, marginRight: 8 },
+  listPrice: { color: '#4CAF50', fontSize: 15, fontWeight: '600' },
+  separator: { height: 1, backgroundColor: '#222', marginLeft: 16 },
+  listError: { color: '#f44336', textAlign: 'center', marginTop: 40, fontSize: 14 },
+  listEnd: { color: '#555', textAlign: 'center', padding: 16, fontSize: 13 },
 })
