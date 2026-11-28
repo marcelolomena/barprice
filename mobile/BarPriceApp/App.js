@@ -17,9 +17,11 @@ import { RNCamera } from 'react-native-camera'
 const API_URL = 'https://barprice-api-node.onrender.com/api/products'
 const API_KEY = 'al_val_pmyvfFNkNPLNkDTYtWbEsZIOpceQzsb4'
 const HEADERS = { 'x-api-key': API_KEY, 'Content-Type': 'application/json' }
+const LIST_LIMIT = 10
 
 export default function App() {
   const [mode, setMode] = useState('scan')
+  const [cameraActive, setCameraActive] = useState(false)
   const [cameraReady, setCameraReady] = useState(false)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -29,6 +31,7 @@ export default function App() {
   const [editName, setEditName] = useState('')
   const [editPrice, setEditPrice] = useState('')
   const [saveError, setSaveError] = useState(null)
+  // List
   const [showList, setShowList] = useState(false)
   const [productList, setProductList] = useState([])
   const [listLoading, setListLoading] = useState(false)
@@ -37,7 +40,21 @@ export default function App() {
   const [listTotal, setListTotal] = useState(0)
   const [listHasMore, setListHasMore] = useState(true)
   const [listOffset, setListOffset] = useState(0)
-  const LIST_LIMIT = 10
+  // Search
+  const [showSearch, setShowSearch] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState([])
+  const [searchLoading, setSearchLoading] = useState(false)
+  // Sync
+  const [syncing, setSyncing] = useState(false)
+  const [syncStatus, setSyncStatus] = useState(null)
+  // Edit price from list
+  const [showEditPrice, setShowEditPrice] = useState(false)
+  const [editPriceProduct, setEditPriceProduct] = useState(null)
+  const [editPriceValue, setEditPriceValue] = useState('')
+  const [editPriceSaving, setEditPriceSaving] = useState(false)
+  const [editPriceError, setEditPriceError] = useState(null)
+  const [editPriceSuccess, setEditPriceSuccess] = useState(false)
 
   const onBarCodeRead = async ({ data }) => {
     if (mode !== 'scan') return
@@ -80,6 +97,16 @@ export default function App() {
     setSuccess(null)
     setEditName('')
     setEditPrice('')
+  }
+
+  const toggleCamera = () => {
+    if (cameraActive) {
+      setCameraActive(false)
+      setCameraReady(false)
+      reset()
+    } else {
+      setCameraActive(true)
+    }
   }
 
   const startEdit = () => {
@@ -143,23 +170,14 @@ export default function App() {
     }
   }
 
-  const openList = async () => {
-    setShowList(true)
-    setProductList([])
-    setListOffset(0)
-    setListHasMore(true)
-    setListError(null)
-    await fetchProducts(0, true)
-  }
-
-  const fetchProducts = async (offset, reset = false) => {
-    if (reset) setListLoading(true)
+  const fetchProducts = async (offset, isReset = false) => {
+    if (isReset) setListLoading(true)
     else setListLoadingMore(true)
     try {
       const res = await fetch(`${API_URL}?limit=${LIST_LIMIT}&offset=${offset}`, { headers: HEADERS })
       if (!res.ok) throw new Error('Error al cargar productos')
       const json = await res.json()
-      setProductList(prev => reset ? json.products : [...prev, ...json.products])
+      setProductList(prev => isReset ? json.products : [...prev, ...json.products])
       setListTotal(json.total)
       setListHasMore(json.hasMore)
       setListOffset(offset + LIST_LIMIT)
@@ -171,14 +189,101 @@ export default function App() {
     }
   }
 
+  const openList = async () => {
+    setShowList(true)
+    setProductList([])
+    setListOffset(0)
+    setListHasMore(true)
+    setListError(null)
+    await fetchProducts(0, true)
+  }
+
   const loadMore = () => {
     if (!listLoadingMore && listHasMore) fetchProducts(listOffset)
   }
 
-  const renderPanel = () => {
-    if (loading) {
-      return <ActivityIndicator size="large" color="#007AFF" />
+  const openSearch = () => {
+    setShowSearch(true)
+    setSearchQuery('')
+    setSearchResults([])
+  }
+
+  const searchProducts = async (query) => {
+    setSearchQuery(query)
+    if (query.trim().length < 3) { setSearchResults([]); return }
+    setSearchLoading(true)
+    try {
+      const res = await fetch(`${API_URL}?limit=200&offset=0`, { headers: HEADERS })
+      if (!res.ok) throw new Error()
+      const json = await res.json()
+      const q = query.toLowerCase()
+      setSearchResults(json.products.filter(p => p.name.toLowerCase().includes(q)))
+    } catch {
+      setSearchResults([])
+    } finally {
+      setSearchLoading(false)
     }
+  }
+
+  const syncServer = async () => {
+    setSyncing(true)
+    setSyncStatus(null)
+    try {
+      const res = await fetch(`${API_URL}?limit=1&offset=0`, { headers: HEADERS })
+      setSyncStatus(res.ok ? 'ok' : 'error')
+    } catch {
+      setSyncStatus('error')
+    } finally {
+      setSyncing(false)
+      setTimeout(() => setSyncStatus(null), 3000)
+    }
+  }
+
+  const openEditPrice = (item) => {
+    setEditPriceProduct(item)
+    setEditPriceValue(String(item.price))
+    setEditPriceError(null)
+    setEditPriceSuccess(false)
+    setShowEditPrice(true)
+  }
+
+  const saveEditPrice = async () => {
+    const p = parseFloat(editPriceValue)
+    if (isNaN(p) || p < 0) { setEditPriceError('Precio inválido'); return }
+    setEditPriceSaving(true)
+    setEditPriceError(null)
+    try {
+      const res = await fetch(`${API_URL}/${editPriceProduct.barcode}`, {
+        method: 'PUT',
+        headers: HEADERS,
+        body: JSON.stringify({ name: editPriceProduct.name, price: p }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || 'Error al guardar')
+      setEditPriceSuccess(true)
+      setProductList(prev => prev.map(x => x.barcode === editPriceProduct.barcode ? { ...x, price: p } : x))
+      setSearchResults(prev => prev.map(x => x.barcode === editPriceProduct.barcode ? { ...x, price: p } : x))
+      setTimeout(() => setShowEditPrice(false), 1000)
+    } catch (e) {
+      setEditPriceError(e.message)
+    } finally {
+      setEditPriceSaving(false)
+    }
+  }
+
+  const renderProductRow = (item, index) => (
+    <View style={styles.listItem}>
+      <Text style={styles.listIndex}>{index + 1}.</Text>
+      <Text style={styles.listName} numberOfLines={1}>{item.name}</Text>
+      <Text style={styles.listPrice}>${item.price.toFixed(2)}</Text>
+      <TouchableOpacity style={styles.editPriceBtn} onPress={() => openEditPrice(item)}>
+        <Text style={styles.editPriceIcon}>✏️</Text>
+      </TouchableOpacity>
+    </View>
+  )
+
+  const renderPanel = () => {
+    if (loading) return <ActivityIndicator size="large" color="#007AFF" />
 
     if (mode === 'result' && product) {
       return (
@@ -207,7 +312,6 @@ export default function App() {
             {isEdit ? '✏ Editar producto' : '➕ Producto no encontrado'}
           </Text>
           <Text style={styles.barcodeLabel}>Código: {scannedBarcode}</Text>
-
           <Text style={styles.label}>Nombre</Text>
           <TextInput
             style={styles.input}
@@ -218,7 +322,6 @@ export default function App() {
             autoFocus
             returnKeyType="next"
           />
-
           <Text style={styles.label}>Precio</Text>
           <TextInput
             style={styles.input}
@@ -230,9 +333,7 @@ export default function App() {
             returnKeyType="done"
             onSubmitEditing={isEdit ? saveEdit : saveNew}
           />
-
           {saveError && <Text style={styles.error}>⚠ {saveError}</Text>}
-
           <View style={styles.row}>
             <TouchableOpacity style={[styles.button, styles.buttonSecondary]} onPress={reset} disabled={saving}>
               <Text style={styles.buttonText}>Cancelar</Text>
@@ -262,42 +363,81 @@ export default function App() {
     return null
   }
 
+  const toolbar = (
+    <View style={styles.toolbar}>
+      <TouchableOpacity style={[styles.toolbarBtn, cameraActive && styles.toolbarBtnActive]} onPress={toggleCamera}>
+        <Text style={styles.toolbarIcon}>{cameraActive ? '⏹' : '📷'}</Text>
+        <Text style={styles.toolbarLabel}>{cameraActive ? 'Detener' : 'Escanear'}</Text>
+      </TouchableOpacity>
+      <TouchableOpacity style={styles.toolbarBtn} onPress={openList}>
+        <Text style={styles.toolbarIcon}>📋</Text>
+        <Text style={styles.toolbarLabel}>Listado</Text>
+      </TouchableOpacity>
+      <TouchableOpacity style={styles.toolbarBtn} onPress={openSearch}>
+        <Text style={styles.toolbarIcon}>🔍</Text>
+        <Text style={styles.toolbarLabel}>Buscar</Text>
+      </TouchableOpacity>
+      <TouchableOpacity style={styles.toolbarBtn} onPress={syncServer} disabled={syncing}>
+        {syncing
+          ? <ActivityIndicator color="#fff" size="small" />
+          : <Text style={styles.toolbarIcon}>
+              {syncStatus === 'ok' ? '✅' : syncStatus === 'error' ? '❌' : '🔄'}
+            </Text>
+        }
+        <Text style={styles.toolbarLabel}>Sincronizar</Text>
+      </TouchableOpacity>
+    </View>
+  )
+
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      {!cameraReady && (
-        <View style={styles.cameraLoading}>
-          <ActivityIndicator size="large" color="#007AFF" />
-          <Text style={styles.cameraLoadingText}>Iniciando cámara...</Text>
+      {cameraActive ? (
+        <>
+          {!cameraReady && (
+            <View style={styles.cameraLoading}>
+              <ActivityIndicator size="large" color="#007AFF" />
+              <Text style={styles.cameraLoadingText}>Iniciando cámara...</Text>
+            </View>
+          )}
+          <RNCamera
+            style={styles.camera}
+            onBarCodeRead={mode === 'scan' ? onBarCodeRead : undefined}
+            onCameraReady={() => setCameraReady(true)}
+            barCodeTypes={[RNCamera.Constants.BarCodeType.ean13, RNCamera.Constants.BarCodeType.ean8, RNCamera.Constants.BarCodeType.code128]}
+            captureAudio={false}
+            androidCameraPermissionOptions={{
+              title: 'Permiso de cámara',
+              message: 'Almacén Valentina necesita acceso a la cámara para escanear códigos de barras.',
+              buttonPositive: 'Permitir',
+              buttonNegative: 'Cancelar',
+            }}
+          >
+            {mode === 'scan' && (
+              <View style={styles.scanArea}>
+                <View style={styles.scanBox} />
+                <Text style={styles.hint}>Apunta al código de barras</Text>
+              </View>
+            )}
+            {toolbar}
+          </RNCamera>
+          {mode !== 'scan' && (
+            <View style={styles.resultPanel}>
+              {renderPanel()}
+            </View>
+          )}
+        </>
+      ) : (
+        <View style={styles.welcome}>
+          {toolbar}
+          <View style={styles.welcomeContent}>
+            <Text style={styles.welcomeIcon}>🛒</Text>
+            <Text style={styles.welcomeTitle}>Almacén Valentina</Text>
+            <Text style={styles.welcomeHint}>Presioná 📷 Escanear para comenzar</Text>
+          </View>
         </View>
       )}
-      <RNCamera
-        style={styles.camera}
-        onBarCodeRead={mode === 'scan' ? onBarCodeRead : undefined}
-        onCameraReady={() => setCameraReady(true)}
-        barCodeTypes={[RNCamera.Constants.BarCodeType.ean13, RNCamera.Constants.BarCodeType.ean8, RNCamera.Constants.BarCodeType.code128]}
-        captureAudio={false}
-        androidCameraPermissionOptions={{
-          title: 'Permiso de cámara',
-          message: 'Almacén Valentina necesita acceso a la cámara para escanear códigos de barras.',
-          buttonPositive: 'Permitir',
-          buttonNegative: 'Cancelar',
-        }}
-      >
-        {mode === 'scan' && (
-          <View style={styles.scanArea}>
-            <View style={styles.scanBox} />
-            <Text style={styles.hint}>Apunta al código de barras</Text>
-          </View>
-        )}
-        <TouchableOpacity style={styles.menuButton} onPress={openList}>
-          <Text style={styles.menuIcon}>☰</Text>
-        </TouchableOpacity>
-      </RNCamera>
 
-      <View style={styles.resultPanel}>
-        {renderPanel()}
-      </View>
-
+      {/* Modal Listado */}
       <Modal visible={showList} animationType="slide" onRequestClose={() => setShowList(false)}>
         <View style={styles.listContainer}>
           <View style={styles.listHeader}>
@@ -306,23 +446,15 @@ export default function App() {
               <Text style={styles.closeButtonText}>✕</Text>
             </TouchableOpacity>
           </View>
-
           {listLoading && <ActivityIndicator size="large" color="#007AFF" style={{ marginTop: 40 }} />}
           {listError && <Text style={styles.listError}>⚠ {listError}</Text>}
-
           {!listLoading && !listError && (
             <>
               <Text style={styles.listCount}>Total: {listTotal} productos</Text>
               <FlatList
                 data={productList}
                 keyExtractor={(item, index) => item.barcode || String(index)}
-                renderItem={({ item, index }) => (
-                  <View style={styles.listItem}>
-                    <Text style={styles.listIndex}>{index + 1}.</Text>
-                    <Text style={styles.listName} numberOfLines={1}>{item.name}</Text>
-                    <Text style={styles.listPrice}>${item.price.toFixed(2)}</Text>
-                  </View>
-                )}
+                renderItem={({ item, index }) => renderProductRow(item, index)}
                 ItemSeparatorComponent={() => <View style={styles.separator} />}
                 onEndReached={loadMore}
                 onEndReachedThreshold={0.3}
@@ -337,6 +469,71 @@ export default function App() {
           )}
         </View>
       </Modal>
+
+      {/* Modal Buscar */}
+      <Modal visible={showSearch} animationType="slide" onRequestClose={() => setShowSearch(false)}>
+        <View style={styles.listContainer}>
+          <View style={styles.listHeader}>
+            <Text style={styles.listTitle}>Buscar producto</Text>
+            <TouchableOpacity onPress={() => setShowSearch(false)} style={styles.closeButton}>
+              <Text style={styles.closeButtonText}>✕</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={styles.searchInputContainer}>
+            <TextInput
+              style={styles.searchInput}
+              value={searchQuery}
+              onChangeText={searchProducts}
+              placeholder="Nombre del producto..."
+              placeholderTextColor="#666"
+              autoFocus
+            />
+          </View>
+          {searchLoading && <ActivityIndicator color="#007AFF" style={{ marginTop: 20 }} />}
+          <FlatList
+            data={searchResults}
+            keyExtractor={(item, index) => item.barcode || String(index)}
+            renderItem={({ item, index }) => renderProductRow(item, index)}
+            ItemSeparatorComponent={() => <View style={styles.separator} />}
+            ListEmptyComponent={() => searchQuery.length > 0 && !searchLoading
+              ? <Text style={styles.listEnd}>{searchQuery.length < 3 ? 'Escribe al menos 3 letras' : 'Sin resultados'}</Text>
+              : null
+            }
+          />
+        </View>
+      </Modal>
+
+      {/* Modal Editar Precio */}
+      <Modal visible={showEditPrice} animationType="fade" transparent onRequestClose={() => setShowEditPrice(false)}>
+        <View style={styles.editPriceOverlay}>
+          <View style={styles.editPriceModal}>
+            <Text style={styles.editPriceTitle}>Editar precio</Text>
+            <Text style={styles.editPriceName} numberOfLines={2}>{editPriceProduct?.name}</Text>
+            <TextInput
+              style={styles.editPriceInput}
+              value={editPriceValue}
+              onChangeText={setEditPriceValue}
+              keyboardType="decimal-pad"
+              placeholder="Nuevo precio"
+              placeholderTextColor="#666"
+              autoFocus
+            />
+            {editPriceError && <Text style={styles.error}>⚠ {editPriceError}</Text>}
+            {editPriceSuccess && <Text style={styles.success}>✓ Guardado</Text>}
+            <View style={styles.row}>
+              <TouchableOpacity style={[styles.button, styles.buttonSecondary]} onPress={() => setShowEditPrice(false)} disabled={editPriceSaving}>
+                <Text style={styles.buttonText}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.button} onPress={saveEditPrice} disabled={editPriceSaving}>
+                {editPriceSaving
+                  ? <ActivityIndicator color="#fff" />
+                  : <Text style={styles.buttonText}>Guardar</Text>
+                }
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   )
 }
@@ -346,18 +543,36 @@ const styles = StyleSheet.create({
   camera: { flex: 1 },
   cameraLoading: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', backgroundColor: '#000', zIndex: 10 },
   cameraLoadingText: { color: '#fff', marginTop: 12, fontSize: 14 },
+  welcome: { flex: 1, backgroundColor: '#111' },
+  welcomeContent: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 16 },
+  welcomeIcon: { fontSize: 64 },
+  welcomeTitle: { color: '#fff', fontSize: 24, fontWeight: '700' },
+  welcomeHint: { color: '#888', fontSize: 15 },
   scanArea: { flex: 1, justifyContent: 'center', alignItems: 'center', marginBottom: 220 },
   scanBox: { width: 250, height: 150, borderWidth: 2, borderColor: '#007AFF', borderRadius: 12 },
   hint: { color: '#fff', fontSize: 14, marginTop: 16 },
-  menuButton: {
+  toolbar: {
     position: 'absolute',
     top: 16,
-    right: 16,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    borderRadius: 8,
-    padding: 10,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 12,
+    paddingHorizontal: 16,
   },
-  menuIcon: { color: '#fff', fontSize: 22 },
+  toolbarBtn: {
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+  },
+  toolbarBtnActive: {
+    backgroundColor: 'rgba(244,67,54,0.75)',
+  },
+  toolbarIcon: { fontSize: 20 },
+  toolbarLabel: { color: '#fff', fontSize: 11, marginTop: 2 },
   resultPanel: {
     position: 'absolute',
     bottom: 0,
@@ -393,7 +608,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#444',
   },
-  // List modal
   listContainer: { flex: 1, backgroundColor: '#111' },
   listHeader: {
     flexDirection: 'row',
@@ -409,16 +623,50 @@ const styles = StyleSheet.create({
   closeButton: { padding: 8 },
   closeButtonText: { color: '#fff', fontSize: 20, fontWeight: '700' },
   listCount: { color: '#888', fontSize: 13, paddingHorizontal: 16, paddingVertical: 10 },
-  listItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
+  listItem: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12 },
   listIndex: { color: '#666', fontSize: 13, width: 32 },
   listName: { color: '#fff', fontSize: 15, flex: 1, marginRight: 8 },
-  listPrice: { color: '#4CAF50', fontSize: 15, fontWeight: '600' },
+  listPrice: { color: '#4CAF50', fontSize: 15, fontWeight: '600', marginRight: 8 },
+  editPriceBtn: { padding: 4 },
+  editPriceIcon: { fontSize: 16 },
   separator: { height: 1, backgroundColor: '#222', marginLeft: 16 },
   listError: { color: '#f44336', textAlign: 'center', marginTop: 40, fontSize: 14 },
   listEnd: { color: '#555', textAlign: 'center', padding: 16, fontSize: 13 },
+  searchInputContainer: { padding: 12, backgroundColor: '#1a1a1a' },
+  searchInput: {
+    backgroundColor: '#222',
+    color: '#fff',
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    fontSize: 16,
+    borderWidth: 1,
+    borderColor: '#444',
+  },
+  editPriceOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  editPriceModal: {
+    backgroundColor: '#1a1a1a',
+    borderRadius: 16,
+    padding: 24,
+    width: '100%',
+  },
+  editPriceTitle: { color: '#fff', fontSize: 18, fontWeight: '700', marginBottom: 8 },
+  editPriceName: { color: '#aaa', fontSize: 14, marginBottom: 16 },
+  editPriceInput: {
+    backgroundColor: '#222',
+    color: '#fff',
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    fontSize: 20,
+    borderWidth: 1,
+    borderColor: '#444',
+    marginBottom: 16,
+  },
 })
